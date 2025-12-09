@@ -1,0 +1,5 @@
+flask
+telebot
+Werkzeug
+pyTelegramBotAPI
+requests
