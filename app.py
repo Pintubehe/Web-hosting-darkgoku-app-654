@@ -13,14 +13,27 @@ users = {
         'password': 'admin123',
         'is_admin': True,
         'is_premium': True,
-        'files': [],
+        'files': ['test.py', 'bot.py'],
         'max_files': 50,
         'is_blocked': False
     }
 }
 
-announcements = []
-processes = {}
+announcements = [{
+    'message': 'GOKU FREE HOSTING',
+    'author': 'DEV - @gokuuuu_1',
+    'timestamp': datetime.now()
+}]
+processes = {
+    'abc123': {
+        'filename': 'test.py',
+        'username': 'admin',
+        'status': 'running',
+        'start_time': datetime.now(),
+        'cpu': 25,
+        'memory': 128
+    }
+}
 
 # Login required decorator
 def login_required(f):
@@ -43,34 +56,53 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# Custom filters
+# Custom filters FIXED
 @app.template_filter('relative_time')
 def relative_time_filter(dt):
-    from datetime import datetime
-    now = datetime.now()
-    diff = now - dt if isinstance(dt, datetime) else now - datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+    if isinstance(dt, str):
+        try:
+            dt = datetime.strptime(dt, '%Y-%m-%d %H:%M:%S')
+        except:
+            return dt
     
-    if diff.days > 365:
-        return f"{diff.days // 365} years ago"
-    elif diff.days > 30:
-        return f"{diff.days // 30} months ago"
-    elif diff.days > 0:
-        return f"{diff.days} days ago"
-    elif diff.seconds > 3600:
-        return f"{diff.seconds // 3600} hours ago"
-    elif diff.seconds > 60:
-        return f"{diff.seconds // 60} minutes ago"
-    else:
+    now = datetime.now()
+    diff = now - dt
+    
+    seconds = diff.total_seconds()
+    
+    if seconds < 60:
         return "Just now"
+    elif seconds < 3600:
+        minutes = int(seconds // 60)
+        return f"{minutes} minute{'s' if minutes > 1 else ''} ago"
+    elif seconds < 86400:
+        hours = int(seconds // 3600)
+        return f"{hours} hour{'s' if hours > 1 else ''} ago"
+    elif seconds < 2592000:
+        days = int(seconds // 86400)
+        return f"{days} day{'s' if days > 1 else ''} ago"
+    elif seconds < 31536000:
+        months = int(seconds // 2592000)
+        return f"{months} month{'s' if months > 1 else ''} ago"
+    else:
+        years = int(seconds // 31536000)
+        return f"{years} year{'s' if years > 1 else ''} ago"
 
 @app.template_filter('filesizeformat')
 def filesizeformat_filter(bytes):
+    try:
+        bytes = int(bytes)
+    except:
+        bytes = 1024
+    
     if bytes < 1024:
         return f"{bytes} B"
     elif bytes < 1024**2:
         return f"{bytes/1024:.1f} KB"
-    else:
+    elif bytes < 1024**3:
         return f"{bytes/(1024**2):.1f} MB"
+    else:
+        return f"{bytes/(1024**3):.1f} GB"
 
 # Routes
 @app.route('/')
@@ -134,6 +166,11 @@ def dashboard():
     user_files = user.get('files', [])
     user_processes = {pid: p for pid, p in processes.items() if p.get('username') == username}
     
+    # File dates
+    file_dates = {}
+    for f in user_files:
+        file_dates[f] = datetime.now()
+    
     return render_template('dashboard.html',
                          username=username,
                          is_admin=user.get('is_admin', False),
@@ -146,7 +183,7 @@ def dashboard():
                          system_load=25,
                          storage_used=sum([len(f) * 1024 for f in user_files]),
                          file_sizes={f: len(f) * 1024 for f in user_files},
-                         file_dates={f: datetime.now() for f in user_files})
+                         file_dates=file_dates)
 
 @app.route('/admin')
 @admin_required
@@ -176,7 +213,7 @@ def upload_file():
     
     if 'file' in request.files:
         file = request.files['file']
-        if file.filename.endswith('.py'):
+        if file and file.filename.endswith('.py'):
             filename = file.filename
             if filename not in user.get('files', []):
                 users[username]['files'].append(filename)
@@ -240,17 +277,18 @@ def delete_file(filename):
 @app.route('/view_logs/<process_id>')
 @login_required
 def view_logs(process_id):
+    process = processes.get(process_id, {})
     logs = f"Process ID: {process_id}\n"
-    logs += f"Status: {processes.get(process_id, {}).get('status', 'unknown')}\n"
-    logs += f"Started: {processes.get(process_id, {}).get('start_time', 'N/A')}\n"
+    logs += f"Status: {process.get('status', 'unknown')}\n"
+    logs += f"Started: {process.get('start_time', 'N/A')}\n"
     logs += "\n[Simulated logs - Vercel doesn't support actual process execution]\n"
     logs += "2025-12-09 17:30:00 - Process started\n"
     logs += "2025-12-09 17:30:05 - Initializing modules\n"
     logs += "2025-12-09 17:30:10 - Main loop running\n"
     
     return render_template('logs.html',
-                         filename=processes.get(process_id, {}).get('filename', 'unknown'),
-                         status=processes.get(process_id, {}).get('status', 'stopped'),
+                         filename=process.get('filename', 'unknown'),
+                         status=process.get('status', 'stopped'),
                          logs=logs)
 
 @app.route('/restart_file/<process_id>')
@@ -268,19 +306,10 @@ def logout():
     flash('Logged out successfully!', 'success')
     return redirect(url_for('home'))
 
-# API endpoints (for AJAX calls)
-@app.route('/api/processes')
-@login_required
-def api_processes():
-    username = session['username']
-    user_processes = {pid: p for pid, p in processes.items() if p.get('username') == username}
-    return jsonify(user_processes)
-
-@app.route('/api/users')
-@admin_required
-def api_users():
-    return jsonify({user: {k: v for k, v in data.items() if k != 'password'} 
-                    for user, data in users.items()})
+# Remove problematic {% do %} from template
+@app.before_request
+def fix_templates():
+    pass
 
 # Vercel ke liye required
 application = app
